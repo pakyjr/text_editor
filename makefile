@@ -1,2 +1,2 @@
 txted: txted.c
-	$(CC) txted.c -o kilo -Wall -Wextra -pedantic -std=99
+	$(CC) txted.c -o txted -Wall -Wextra -pedantic -std=c99

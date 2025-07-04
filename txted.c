@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <termios.h>
+#include <sys/ioctl.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 /**  Map character to Ctrl+<key> combo (e.g., 'A' -> Ctrl+A)
@@ -12,27 +13,38 @@
  */
 
 /** REGION: data */
-struct termios og_termios;
+struct editorConfig
+{
+    int screenrows;
+    int screencols;
+    struct termios orig_termios;
+};
+
+struct editorConfig E;
 
 void die(const char *s)
 {
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
+    // reference for these two write calls at line 110
+
     perror(s);
     exit(1);
 }
 /** REGION: terminal */
 void disableRawMode(void)
 {
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &og_termios) == -1)
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1)
         die("tcsetattr");
 }
 
 void enableRawMode(void)
 {
-    if (tcgetattr(STDIN_FILENO, &og_termios) == -1) // get attr inside raw
+    if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) // get attr inside raw
         die("tcgetattr");
     atexit(disableRawMode); // calls this function when exiting (through normal exiting).
 
-    struct termios raw = og_termios;
+    struct termios raw = E.orig_termios;
 
     raw.c_cflag |= (CS8);
     // using the or we are not disabling, rather we are adding a bit mask
@@ -84,6 +96,20 @@ char editorReadKey()
     return c;
 }
 
+int getWindowSize(int *rows, int *cols)
+{
+    struct winsize ws; // from ioctl.h
+
+    // TIOCGWINSZ - Terminal IOCtl (which itself stands for Input/Output Control) Get WINdow SiZe.)
+    // ioctl() will place the number of columns wide and the number of rows high the terminal is into the given winsize struct
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
+        return -1;
+
+    *cols = ws.ws_col;
+    *rows = ws.ws_row;
+    return 0;
+}
+
 /** REGION: input */
 void editorProcessKeypress()
 {
@@ -92,12 +118,25 @@ void editorProcessKeypress()
     switch (c)
     {
     case CTRL_KEY('q'):
+        write(STDOUT_FILENO, "\x1b[2J", 4);
+        write(STDOUT_FILENO, "\x1b[H", 3);
+        // reference for these two write calls at line 110
+
         exit(0);
         break;
     }
 }
 
 /** REGION: output */
+void editorDrawRows()
+{
+    int y;
+    for (y = 0; y < E.screenrows; y++) // 24rows temp.
+    {
+        write(STDOUT_FILENO, "~\r\n", 3);
+    }
+}
+
 void editorRefreshScren()
 {
     write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -110,12 +149,23 @@ void editorRefreshScren()
     // Repositions the cursor at the top left side of the screen
     // The escape sequence \x1b[H uses the 'H' command (Cursor Position) to move the cursor.
     // It takes two arguments: row and column (e.g., \x1b[12;40H centers the cursor on an 80×24 screen).
+
+    editorDrawRows();
+    write(STDOUT_FILENO, "\x1b[H", 3); // reposition again after printing tilde rows
 }
 
 /** REGION: init */
+
+void initEditor()
+{
+    if (getWindowSize(&E.screenrows, &E.screencols) == -1)
+        die("getWindowSize");
+}
+
 int main(void)
 {
     enableRawMode();
+    initEditor();
 
     while (1)
     {

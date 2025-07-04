@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -6,15 +7,23 @@
 
 struct termios og_termios;
 
+void die(const char *s)
+{
+    perror(s);
+    exit(1);
+}
+
 void disableRawMode(void)
 {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &og_termios);
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &og_termios) == -1)
+        die("tcsetattr");
 }
 
 void enableRawMode(void)
 {
-    tcgetattr(STDIN_FILENO, &og_termios); // get attr inside raw
-    atexit(disableRawMode);               // calls this function when exiting (through normal exiting).
+    if (tcgetattr(STDIN_FILENO, &og_termios) == -1) // get attr inside raw
+        die("tcgetattr");
+    atexit(disableRawMode); // calls this function when exiting (through normal exiting).
 
     struct termios raw = og_termios;
 
@@ -50,7 +59,8 @@ void enableRawMode(void)
     // Sets a timeout
     raw.c_cc[VTIME] = 1;
 
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); // set
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
+        die("tcsetattr"); // set
 }
 
 int main(void)
@@ -62,7 +72,8 @@ int main(void)
     while (1)
     {
         char c = '\0';
-        read(STDIN_FILENO, &c, 1);
+        if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN)
+            die("read");
 
         if (iscntrl(c)) // test wether a char is control char. (non printable characters)
         {

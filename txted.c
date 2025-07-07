@@ -95,6 +95,50 @@ char editorReadKey()
 
     return c;
 }
+/**
+ * Fallback method to get the window size, the hard way, using the cursor position to determine the size.
+ */
+int getCursorPosition(int *rows, int *cols)
+{
+    // TODO FIND BUFF EXPLANINATION.
+    char buffer[32];
+    unsigned int i = 0;
+
+    /**
+     * The n command queries the terminal for status information, the 6 argument asks for the cursos position.
+     * on the write we pass the STDOUTPUT, that can be read in the read() using the STDINPUT.
+     */
+    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4)
+        return -1;
+
+    /**
+     * We use the buffer to read the response from the escape sequence, when we reach the R command we add a terminator character
+     */
+    while (i < sizeof(buffer) - 1)
+    {
+        if (read(STDIN_FILENO, &buffer[i], 1) != 1)
+            break;
+        if (buffer[i] == 'R')
+            break;
+        i++;
+    }
+
+    buffer[i] = '\0';
+    /* We start printing at index 1, otherwise the terminal would interpret the escape sequence, not printing it.*/
+    if (buffer[0] != '\x1b' || buffer[1] != '[') // buffer should contain <esc>[24;80
+        return -1;
+    /**
+     * we are passing a string of the form 24;80 to sscanf().
+     * We are also passing it the string %d;%d which tells it to parse two integers separated by a ;
+     * and put the values into the rows and cols variables.
+     * */
+    if (sscanf(&buffer[2], "%d;%d", rows, cols) != 2)
+        return -1;
+
+    editorReadKey();
+
+    return -1;
+}
 
 int getWindowSize(int *rows, int *cols)
 {
@@ -103,7 +147,14 @@ int getWindowSize(int *rows, int *cols)
     // TIOCGWINSZ - Terminal IOCtl (which itself stands for Input/Output Control) Get WINdow SiZe.)
     // ioctl() will place the number of columns wide and the number of rows high the terminal is into the given winsize struct
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
-        return -1;
+    {
+        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) // fallback method of getting the window size. (ioctl doesnt work on some systems)
+                                                                  // position the cursor at the bottom-right of the screen, then use escape sequences that let us query the position of the cursor.
+            // C command pushes the cursor to the right, B pushes the cursor to the bottom, we pass 999 as an argument so we're sure its on the bottom right
+            // x1b is the byte sequence that is equivalent to <ESC>
+            return -1;
+        return getCursorPosition(rows, cols); // replies with an escape sequence.
+    }
 
     *cols = ws.ws_col;
     *rows = ws.ws_row;
@@ -131,9 +182,13 @@ void editorProcessKeypress()
 void editorDrawRows()
 {
     int y;
-    for (y = 0; y < E.screenrows; y++) // 24rows temp.
+    for (y = 0; y < E.screenrows; y++)
     {
-        write(STDOUT_FILENO, "~\r\n", 3);
+        write(STDOUT_FILENO, "~", 1);
+        if (y < E.screenrows - 1)
+        {
+            write(STDOUT_FILENO, "\r\n", 2);
+        }
     }
 }
 

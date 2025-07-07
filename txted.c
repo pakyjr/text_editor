@@ -5,7 +5,9 @@
 #include <unistd.h>
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <string.h>
 
+#define TXTED_VERSION "0.0.1"
 #define CTRL_KEY(k) ((k) & 0x1f)
 /**  Map character to Ctrl+<key> combo (e.g., 'A' -> Ctrl+A)
  * C doens't have binary literals so we use hexa since it's also more concise, it maps to 00011111, which means that we are disabling the
@@ -82,7 +84,7 @@ void enableRawMode(void)
         die("tcsetattr"); // set
 }
 
-char editorReadKey()
+char editorReadKey(void)
 {
     // read 1 byte from the std input into char c. Keep doing it until there are no more bytes to read. Returns the n of bytes it read.
     int nread;
@@ -160,9 +162,19 @@ int getWindowSize(int *rows, int *cols)
     *rows = ws.ws_row;
     return 0;
 }
+/** REGION: append buffer */
+
+/** We need a dynamic string type that supports appending, since C doesn't have it by default, let's make our own */
+struct append_buffer
+{
+    char *buffer;
+    int len;
+};
+
+#define ABUFF_INIT {NULL, 0} //{pointer, length}
 
 /** REGION: input */
-void editorProcessKeypress()
+void editorProcessKeypress(void)
 {
     char c = editorReadKey();
 
@@ -178,40 +190,64 @@ void editorProcessKeypress()
     }
 }
 
+/** Append a new string to our current one */
+void append_string(struct append_buffer *ab, const char *s, int len)
+{
+    char *new = realloc(ab->buffer, ab->len + len); // Make enough space to append the new string
+    if (new == NULL)
+        return;
+    memcpy(&new[ab->len], s, len); // We copy the new string to the end of our current one ab->len is the adress of the end of the current string
+    ab->buffer = new;              // the new buffer is the old string plus the appended value
+    ab->len += len;                // the new length is the old one plus the new string length
+}
+
+/** Destructor */
+void ab_free(struct append_buffer *ab)
+{
+    free(ab->buffer);
+}
+
 /** REGION: output */
-void editorDrawRows()
+void editorDrawRows(struct append_buffer *ab)
 {
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        write(STDOUT_FILENO, "~", 1);
+        append_string(ab, "~", 1);
+        append_string(ab, "\x1b[K", 3); // command <esc>K is "erase line"
         if (y < E.screenrows - 1)
         {
-            write(STDOUT_FILENO, "\r\n", 2);
+            append_string(ab, "\r\n", 2);
         }
     }
 }
 
-void editorRefreshScren()
+void editorRefreshScreen(void)
 {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
+    struct append_buffer ab = ABUFF_INIT;
+    append_string(&ab, "\x1b[?25l", 6); // l command is for "reset mode"
+    // append_string(&ab, "\x1b[2J", 4); //commented to increase perfomance, since clearing everytime it's less optimal.
     // Write 4 bytes to the terminal: an escape sequence (\x1b[2J) that clears the screen.
     // Escape sequences start with \x1b (ESC) and control terminal formatting.
     // The escape sequence \x1b[2J uses the 'J' command (Erase In Display) with argument 2 to clear the entire screen.
     // Other options: [0J clears from cursor to end, [1J clears from start to cursor, [J defaults to [0J.
 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    append_string(&ab, "\x1b[H", 3);
     // Repositions the cursor at the top left side of the screen
     // The escape sequence \x1b[H uses the 'H' command (Cursor Position) to move the cursor.
     // It takes two arguments: row and column (e.g., \x1b[12;40H centers the cursor on an 80×24 screen).
 
-    editorDrawRows();
-    write(STDOUT_FILENO, "\x1b[H", 3); // reposition again after printing tilde rows
+    editorDrawRows(&ab);
+    append_string(&ab, "\x1b[H", 3);    // reposition again after printing tilde rows
+    append_string(&ab, "\x1b[?25h", 6); // h command is for "set mode"
+
+    write(STDOUT_FILENO, ab.buffer, ab.len);
+    ab_free(&ab);
 }
 
 /** REGION: init */
 
-void initEditor()
+void initEditor(void)
 {
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
@@ -224,7 +260,7 @@ int main(void)
 
     while (1)
     {
-        editorRefreshScren();
+        editorRefreshScreen();
         editorProcessKeypress();
     }
 

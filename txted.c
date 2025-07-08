@@ -9,14 +9,17 @@
 
 #define TXTED_VERSION "0.0.1"
 #define CTRL_KEY(k) ((k) & 0x1f)
-/**  Map character to Ctrl+<key> combo (e.g., 'A' -> Ctrl+A)
- * C doens't have binary literals so we use hexa since it's also more concise, it maps to 00011111, which means that we are disabling the
+/**
+ * Map character to Ctrl+<key> combo (e.g., 'A' -> Ctrl+A)
+ * C doesn't have binary literals so we use hex since it's also more concise, it maps to 00011111, which means that we are disabling the
  * ctrl-key equivalent of that key using the bitwise AND stripping bit 5 and 6.
  */
 
 /** REGION: data */
 struct editorConfig
 {
+    int cursor_x;
+    int cursor_y;
     int screenrows;
     int screencols;
     struct termios orig_termios;
@@ -24,6 +27,9 @@ struct editorConfig
 
 struct editorConfig E;
 
+/**
+ * Print error message and exit, restoring terminal state.
+ */
 void die(const char *s)
 {
     write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -34,12 +40,18 @@ void die(const char *s)
     exit(1);
 }
 /** REGION: terminal */
+/**
+ * Disable raw mode and restore original terminal settings.
+ */
 void disableRawMode(void)
 {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1)
         die("tcsetattr");
 }
 
+/**
+ * Enable raw mode for terminal input.
+ */
 void enableRawMode(void)
 {
     if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) // get attr inside raw
@@ -54,23 +66,27 @@ void enableRawMode(void)
     // cflag stands for "control flag"
 
     raw.c_iflag &= ~(ICRNL | IXON | BRKINT | INPCK | ISTRIP);
-    /*
-    i flag is referred as "input flag"
-    ICRNL Disables ctrl M
-    IXON disables ctrl
-    */
+    /**
+     * i flag is referred as "input flag"
+     * ICRNL Disables ctrl M
+     * IXON disables ctrl
+     */
 
     raw.c_oflag &= ~(OPOST);
-    // oflag is referred as output flags
-    // OPOST Flag disables Post Processing output for /n /r
+    /**
+     * oflag is referred as output flags
+     * OPOST Flag disables Post Processing output for /n /r
+     */
 
     // disables ECHO
     raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-    /* ECHO prints every typed char into terminal. ~ flips the bits, bitwise & operator is useful to set to 0 all the bits in the ECHO
-    SUSPEND CANON MODE
-    SUSPEND ISIG (CTRL Z & CTRL C FLAGS) (i can only quit if I press q (line 41))
-    SUSPEND IEXTEN (Suspend CTRL O & CTRL V)
-    lflag is for "local flags", can be used as a dumping ground for other states. */
+    /**
+     * ECHO prints every typed char into terminal. ~ flips the bits, bitwise & operator is useful to set to 0 all the bits in the ECHO
+     * SUSPEND CANON MODE
+     * SUSPEND ISIG (CTRL Z & CTRL C FLAGS) (i can only quit if I press q (line 41))
+     * SUSPEND IEXTEN (Suspend CTRL O & CTRL V)
+     * lflag is for "local flags", can be used as a dumping ground for other states.
+     */
 
     // TCA Flush argument specifies when to apply the set.
     // it waits for all pending output to be written to the terminal.
@@ -84,6 +100,9 @@ void enableRawMode(void)
         die("tcsetattr"); // set
 }
 
+/**
+ * Read a single keypress from standard input.
+ */
 char editorReadKey(void)
 {
     // read 1 byte from the std input into char c. Keep doing it until there are no more bytes to read. Returns the n of bytes it read.
@@ -133,7 +152,7 @@ int getCursorPosition(int *rows, int *cols)
      * we are passing a string of the form 24;80 to sscanf().
      * We are also passing it the string %d;%d which tells it to parse two integers separated by a ;
      * and put the values into the rows and cols variables.
-     * */
+     */
     if (sscanf(&buffer[2], "%d;%d", rows, cols) != 2)
         return -1;
 
@@ -142,16 +161,21 @@ int getCursorPosition(int *rows, int *cols)
     return -1;
 }
 
+/**
+ * Get the size of the terminal window.
+ */
 int getWindowSize(int *rows, int *cols)
 {
     struct winsize ws; // from ioctl.h
 
-    // TIOCGWINSZ - Terminal IOCtl (which itself stands for Input/Output Control) Get WINdow SiZe.)
-    // ioctl() will place the number of columns wide and the number of rows high the terminal is into the given winsize struct
+    /**
+     * TIOCGWINSZ - Terminal IOCtl (which itself stands for Input/Output Control) Get WINdow SiZe.)
+     * ioctl() will place the number of columns wide and the number of rows high the terminal is into the given winsize struct
+     */
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
     {
         if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) // fallback method of getting the window size. (ioctl doesnt work on some systems)
-                                                                  // position the cursor at the bottom-right of the screen, then use escape sequences that let us query the position of the cursor.
+            // position the cursor at the bottom-right of the screen, then use escape sequences that let us query the position of the cursor.
             // C command pushes the cursor to the right, B pushes the cursor to the bottom, we pass 999 as an argument so we're sure its on the bottom right
             // x1b is the byte sequence that is equivalent to <ESC>
             return -1;
@@ -164,7 +188,9 @@ int getWindowSize(int *rows, int *cols)
 }
 /** REGION: append buffer */
 
-/** We need a dynamic string type that supports appending, since C doesn't have it by default, let's make our own */
+/**
+ * We need a dynamic string type that supports appending, since C doesn't have it by default, let's make our own
+ */
 struct append_buffer
 {
     char *buffer;
@@ -174,6 +200,9 @@ struct append_buffer
 #define ABUFF_INIT {NULL, 0} //{pointer, length}
 
 /** REGION: input */
+/**
+ * Process a keypress from the user.
+ */
 void editorProcessKeypress(void)
 {
     char c = editorReadKey();
@@ -190,7 +219,9 @@ void editorProcessKeypress(void)
     }
 }
 
-/** Append a new string to our current one */
+/**
+ * Append a new string to our current one.
+ */
 void append_string(struct append_buffer *ab, const char *s, int len)
 {
     char *new = realloc(ab->buffer, ab->len + len); // Make enough space to append the new string
@@ -201,20 +232,47 @@ void append_string(struct append_buffer *ab, const char *s, int len)
     ab->len += len;                // the new length is the old one plus the new string length
 }
 
-/** Destructor */
+/**
+ * Destructor for append_buffer.
+ */
 void ab_free(struct append_buffer *ab)
 {
     free(ab->buffer);
 }
 
 /** REGION: output */
+/**
+ * Draw the rows of the editor, including the welcome message and tildes.
+ */
 void editorDrawRows(struct append_buffer *ab)
 {
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        append_string(ab, "~", 1);
-        append_string(ab, "\x1b[K", 3); // command <esc>K is "erase line"
+        if (y == E.screenrows / 3)
+        {
+            char welcome[80];
+            int welcomelen = snprintf(welcome, sizeof(welcome),
+                                      "Kilo editor -- version %s", TXTED_VERSION);
+            if (welcomelen > E.screencols)
+                welcomelen = E.screencols;
+
+            int padding = (E.screencols - welcomelen) / 2;
+            if (padding)
+            {
+                append_string(ab, "~", 1);
+                padding--;
+            }
+            while (padding--)
+                append_string(ab, " ", 1);
+
+            append_string(ab, welcome, welcomelen);
+        }
+        else
+        {
+            append_string(ab, "~", 1);
+        }
+        append_string(ab, "\x1b[K", 3);
         if (y < E.screenrows - 1)
         {
             append_string(ab, "\r\n", 2);
@@ -222,6 +280,9 @@ void editorDrawRows(struct append_buffer *ab)
     }
 }
 
+/**
+ * Refresh the editor screen, drawing all rows and repositioning the cursor.
+ */
 void editorRefreshScreen(void)
 {
     struct append_buffer ab = ABUFF_INIT;
@@ -238,6 +299,11 @@ void editorRefreshScreen(void)
     // It takes two arguments: row and column (e.g., \x1b[12;40H centers the cursor on an 80×24 screen).
 
     editorDrawRows(&ab);
+
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "\x1b[%d;%dH", E.cursor_y + 1, E.cursor_x + 1);
+    append_string(&ab, buffer, strlen(buffer));
+
     append_string(&ab, "\x1b[H", 3);    // reposition again after printing tilde rows
     append_string(&ab, "\x1b[?25h", 6); // h command is for "set mode"
 
@@ -247,8 +313,14 @@ void editorRefreshScreen(void)
 
 /** REGION: init */
 
+/**
+ * Initialize the editor state and get the window size.
+ */
 void initEditor(void)
 {
+    E.cursor_x = 0;
+    E.cursor_y = 0;
+
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
 }

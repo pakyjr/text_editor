@@ -15,6 +15,15 @@
  * ctrl-key equivalent of that key using the bitwise AND stripping bit 5 and 6.
  */
 
+enum editorKey {
+    ARROW_LEFT = 1000, 
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN,
+    PAGE_UP,
+    PAGE_DOWN
+};
+
 /** REGION: data */
 struct editorConfig
 {
@@ -103,7 +112,7 @@ void enableRawMode(void)
 /**
  * Read a single keypress from standard input.
  */
-char editorReadKey(void)
+int editorReadKey(void)
 {
     // read 1 byte from the std input into char c. Keep doing it until there are no more bytes to read. Returns the n of bytes it read.
     int nread;
@@ -113,9 +122,38 @@ char editorReadKey(void)
         if (nread == -1 && errno != EAGAIN)
             die("read");
     }
+    
+    if(c == '\x1b') {
+        char seq[3];
 
-    return c;
+        if(read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if(read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+        if(seq[0] == '[') {
+            if(seq[1] >= '0' && seq[1] <= 9) {
+                if(read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+                if(seq[2] == '~') {
+                    switch (seq[1]) {
+                        case '5': return PAGE_UP;
+                        case '6': return PAGE_DOWN;
+                    }
+                }
+            } else 
+            switch (seq[1]) {
+                case 'A' : return ARROW_UP;
+                case 'B' : return ARROW_DOWN;
+                case 'C' : return ARROW_RIGHT;
+                case 'D' : return ARROW_LEFT;
+            }
+        }
+
+        return '\x1b';
+    } else {
+        return c;
+    }
 }
+
+
 /**
  * Fallback method to get the window size, the hard way, using the cursor position to determine the size.
  */
@@ -200,12 +238,40 @@ struct append_buffer
 #define ABUFF_INIT {NULL, 0} //{pointer, length}
 
 /** REGION: input */
+
+void editorMoveCursor(int key)
+{
+    switch (key)
+    {
+    case ARROW_LEFT:
+        if(E.cursor_x != 0){ 
+            E.cursor_x--;
+        }
+        break;
+    case ARROW_RIGHT:
+        if(E.cursor_x != -1){ 
+            E.cursor_x++;
+        }
+        break;
+    case ARROW_UP:
+        if(E.cursor_y != 0){ 
+            E.cursor_y--;
+        }
+        break;
+    case ARROW_DOWN:
+        if(E.cursor_y != -1){ 
+            E.cursor_y++;
+        }
+        break;
+    }
+}
+
 /**
  * Process a keypress from the user.
  */
 void editorProcessKeypress(void)
 {
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c)
     {
@@ -215,6 +281,13 @@ void editorProcessKeypress(void)
         // reference for these two write calls at line 110
 
         exit(0);
+        break;
+
+    case ARROW_UP:
+    case ARROW_DOWN:
+    case ARROW_LEFT:
+    case ARROW_RIGHT:
+        editorMoveCursor(c);
         break;
     }
 }
@@ -304,7 +377,7 @@ void editorRefreshScreen(void)
     snprintf(buffer, sizeof(buffer), "\x1b[%d;%dH", E.cursor_y + 1, E.cursor_x + 1);
     append_string(&ab, buffer, strlen(buffer));
 
-    append_string(&ab, "\x1b[H", 3);    // reposition again after printing tilde rows
+    // append_string(&ab, "\x1b[H", 3);    // reposition again after printing tilde rows
     append_string(&ab, "\x1b[?25h", 6); // h command is for "set mode"
 
     write(STDOUT_FILENO, ab.buffer, ab.len);
